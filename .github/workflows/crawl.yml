@@ -1,0 +1,71 @@
+name: crawl-stars
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'  # daily at 03:00 UTC (optional)
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests psycopg2-binary
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U postgres && break
+            echo "Waiting for postgres..."
+            sleep 2
+          done
+
+      - name: Setup DB (create schema)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -c "CREATE TABLE IF NOT EXISTS repos (github_id TEXT PRIMARY KEY, name_with_owner TEXT NOT NULL, url TEXT NOT NULL, stars INTEGER NOT NULL, last_crawled TIMESTAMP NOT NULL); CREATE INDEX IF NOT EXISTS idx_repos_stars ON repos (stars DESC);"
+
+      - name: Crawl stars
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # default token available in Actions
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: |
+          python crawl_stars.py --target 100000
+
+      - name: Dump DB to CSV
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -c "\copy (SELECT github_id, name_with_owner, url, stars, last_crawled FROM repos) TO 'repos_dump.csv' CSV HEADER"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: repos-dump
+          path: repos_dump.csv
