@@ -50,7 +50,7 @@ jobs:
           python view_and_export.py
 
       - name: Upload CSV artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: repos-csv
           path: repos.csv
