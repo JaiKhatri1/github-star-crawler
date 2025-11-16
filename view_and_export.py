@@ -44,9 +44,10 @@ cols = [desc[0] for desc in cur.description]
 
 # Use pandas to easily write CSV
 df = pd.DataFrame(rows, columns=cols)
-csv_path = "C:/Users/ic/Desktop/repos.csv"
+import os
+csv_path = os.path.join(os.getcwd(), "repos.csv")
 df.to_csv(csv_path, index=False)
-print(f"\nAll repo data exported to {csv_path}")
+print(f"CSV saved to {csv_path}")
 
 cur.close()
 conn.close()

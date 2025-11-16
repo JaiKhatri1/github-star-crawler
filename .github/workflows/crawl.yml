@@ -48,3 +48,9 @@ jobs:
       - name: Export CSV
         run: |
           python view_and_export.py
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: repos-csv
+          path: repos.csv
