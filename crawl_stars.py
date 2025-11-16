@@ -11,9 +11,7 @@ from math import ceil
 load_dotenv()
 
 GQL_URL = "https://api.github.com/graphql"
-# GraphQL search returns up to 100 nodes per request
 PAGE_SIZE = 100
-# max retries on transient HTTP errors
 MAX_RETRIES = 6
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -59,21 +57,17 @@ def graphql_request(variables):
         if resp.status_code == 200:
             j = resp.json()
             if "errors" in j:
-                # sometimes GitHub returns rate-limit or other transient messages in errors
                 print("GraphQL returned errors:", j["errors"], file=sys.stderr)
-                # treat as transient
                 time.sleep(backoff)
                 backoff *= 2
                 continue
             return j
         elif resp.status_code in (502, 503, 504, 429):
-            # transient server error or rate-limited by infra
             print(f"Transient HTTP {resp.status_code}, attempt {attempt}. Backoff {backoff}s", file=sys.stderr)
             time.sleep(backoff)
             backoff *= 2
             continue
         else:
-            # unexpected permanent error
             print(f"HTTP {resp.status_code} - {resp.text}", file=sys.stderr)
             resp.raise_for_status()
     raise RuntimeError("Max retries exceeded for GraphQL request")
@@ -92,7 +86,6 @@ def ensure_table(conn):
         conn.commit()
 
 def upsert_rows(conn, rows):
-    # rows: list of tuples (github_id, name_with_owner, url, stars, last_crawled)
     if not rows:
         return
     with conn.cursor() as cur:
@@ -125,23 +118,13 @@ def main():
     q = args.query
 
     from urllib.parse import urlparse
-
     result = urlparse(DATABASE_URL)
-    conn = psycopg2.connect(
-        dbname=result.path[1:],       # remove leading /
-        user=result.username,
-        password=result.password,
-        host=result.hostname,
-        port=result.port
-    )
+    conn = psycopg2.connect(dbname=result.path[1:], user=result.username, password=result.password, host=result.hostname, port=result.port)
     ensure_table(conn)
 
     fetched = 0
     after = None
-    now = datetime.utcnow().replace(microsecond=0).isoformat()
-    # Use search query; keep it simple (public repos). You can refine to languages, etc.
     variables = {"q": q, "first": PAGE_SIZE, "after": None}
-
     while fetched < target:
         variables["after"] = after
         j = graphql_request(variables)
@@ -150,22 +133,18 @@ def main():
             remaining = rate.get("remaining")
             reset_at = rate.get("resetAt")
             cost = rate.get("cost")
-            # If remaining is dangerously low, wait until reset
             if remaining is not None and remaining < 10:
-                # compute sleep until resetAt (ISO8601)
                 if reset_at:
                     reset_ts = datetime.fromisoformat(reset_at.replace("Z", "+00:00")).timestamp()
                     sleep_for = max(0, reset_ts - time.time()) + 5.0
                     print(f"Low remaining rate ({remaining}). Sleeping until reset in {ceil(sleep_for)}s", file=sys.stderr)
                     time.sleep(sleep_for)
                     continue
-
         search = j["data"]["search"]
         nodes = search["nodes"]
         page_info = search["pageInfo"]
         rows = []
         for node in nodes:
-            # node can be None occasionally
             if not node:
                 continue
             github_id = node["id"]
@@ -176,19 +155,14 @@ def main():
             fetched += 1
             if fetched >= target:
                 break
-
         upsert_rows(conn, rows)
         print(f"Fetched total: {fetched}/{target}", file=sys.stderr)
-
         if fetched >= target:
             break
-
         if not page_info["hasNextPage"]:
             print("No more pages from search; stopping.", file=sys.stderr)
             break
         after = page_info["endCursor"]
-
-        # Small sleep to be polite (GraphQL rateLimit already helps), can be tuned
         time.sleep(0.5)
 
     conn.close()
